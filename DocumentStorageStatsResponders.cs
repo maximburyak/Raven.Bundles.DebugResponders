@@ -67,51 +67,62 @@ namespace Raven.Bundles.DebugExtentions
 				return;
 			}
 
-			using (var streamingDisposer = context.Response.Streaming())
-			using (var writer = new JsonTextWriter(new StreamWriter(context.Response.OutputStream)))
-
+			try
 			{
-				writer.WriteStartObject();
-				writer.WritePropertyName("DocumentsAndSizes");
-				writer.WriteStartArray();
-				transactionalStorage.Batch(accessor =>
+				using (var streamingDisposer = context.Response.Streaming())
+				using (var writer = new JsonTextWriter(new StreamWriter(context.Response.OutputStream)))
+
 				{
-					Session session;
-					TableColumnsCache tableColumnsCache;
-					Table documentsTable;
-
-					ExtractInternalEsentProperties(accessor, out session, out tableColumnsCache, out documentsTable);
-
-					Api.JetSetCurrentIndex(session, documentsTable, "by_etag");
-					Api.MoveBeforeFirst(session, documentsTable);
-					Stopwatch duration = null;
-
-					while (Api.TryMoveNext(session, documentsTable))
+					writer.WriteStartObject();
+					writer.WritePropertyName("DocumentsAndSizes");
+					writer.WriteStartArray();
+					transactionalStorage.Batch(accessor =>
 					{
-						var dataColumnSize = Api.RetrieveColumnSize(session, documentsTable, tableColumnsCache.DocumentsColumns["data"]);
-						var metadataColumnSize = Api.RetrieveColumnSize(session, documentsTable,
-							tableColumnsCache.DocumentsColumns["metadata"]);
+						Session session;
+						TableColumnsCache tableColumnsCache;
+						Table documentsTable;
 
-						var curDocSize = dataColumnSize ?? 0 + metadataColumnSize ?? 0;
+						ExtractInternalEsentProperties(accessor, out session, out tableColumnsCache, out documentsTable);
 
-						if (curDocSize > minSizeToTrace)
+						Api.JetSetCurrentIndex(session, documentsTable, "by_etag");
+						Api.MoveBeforeFirst(session, documentsTable);
+						Stopwatch duration = null;
+						var sp = Stopwatch.StartNew();
+						while (Api.TryMoveNext(session, documentsTable))
 						{
-							writer.WriteStartObject();
-							writer.WritePropertyName("Id");
+							var dataColumnSize = Api.RetrieveColumnSize(session, documentsTable, tableColumnsCache.DocumentsColumns["data"]);
+							var metadataColumnSize = Api.RetrieveColumnSize(session, documentsTable,
+								tableColumnsCache.DocumentsColumns["metadata"]);
 
-							string docKey = Api.RetrieveColumnAsString(session, documentsTable, tableColumnsCache.DocumentsColumns["key"]);
-							writer.WriteValue(docKey);
-							writer.WritePropertyName("Size");
-							writer.WriteValue(curDocSize);
-							writer.WriteEndObject();
-							writer.Flush();
+							var curDocSize = dataColumnSize ?? 0 + metadataColumnSize ?? 0;
+							if (sp.ElapsedMilliseconds > 1000)
+							{
+								context.Write(" ");
+								sp.Restart();
+							}
+							if (curDocSize > minSizeToTrace)
+							{
+								writer.WriteStartObject();
+								writer.WritePropertyName("Id");
+
+								string docKey = Api.RetrieveColumnAsString(session, documentsTable, tableColumnsCache.DocumentsColumns["key"]);
+								writer.WriteValue(docKey);
+								writer.WritePropertyName("Size");
+								writer.WriteValue(curDocSize);
+								writer.WriteEndObject();
+								writer.Flush();
+							}
 						}
-					}
-				});
-				writer.WriteEndArray();
-				writer.WriteEndObject();
-				writer.Flush();
-				writer.Close();
+					});
+					writer.WriteEndArray();
+					writer.WriteEndObject();
+					writer.Flush();
+					writer.Close();
+				}
+			}
+			catch (Exception e)
+			{
+				context.Write(e.Message);
 			}
 
 		}
